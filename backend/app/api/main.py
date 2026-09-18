@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import os
 import logging
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,10 +34,21 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
+def _get_cors_origins() -> list[str]:
+    raw_origins = [o.strip() for o in settings.FRONTEND_ORIGIN.split(",") if o.strip()]
+    if os.getenv("ENV") != "production":
+        for dev in ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]:
+            if dev not in raw_origins:
+                raw_origins.append(dev)
+    return raw_origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_ORIGIN, "http://localhost:5173", "http://localhost:3000"],
-    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    allow_origins=_get_cors_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 app.include_router(auth.router)
 app.include_router(projects.router)

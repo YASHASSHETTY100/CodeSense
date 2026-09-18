@@ -40,12 +40,22 @@ INSECURE_DEV_SECRET = "change-me-dev-secret"
 
 
 def validate_security_settings():
-    if settings.JWT_SECRET == INSECURE_DEV_SECRET:
-        if os.getenv("ENV") == "production":
+    if os.getenv("ENV") == "production":
+        if settings.JWT_SECRET == INSECURE_DEV_SECRET or not settings.JWT_SECRET:
             raise ValueError(
                 "CRITICAL SECURITY FAILURE: JWT_SECRET must be configured with a secure random secret in production!"
             )
-        else:
+        if len(settings.JWT_SECRET) < 32:
+            raise ValueError(
+                "CRITICAL SECURITY FAILURE: JWT_SECRET must be at least 32 characters long in production!"
+            )
+        if "localhost" in settings.FRONTEND_ORIGIN:
+            logger.warning(
+                "PRODUCTION CONFIG WARNING: FRONTEND_ORIGIN contains 'localhost' in production mode (%s).",
+                settings.FRONTEND_ORIGIN,
+            )
+    else:
+        if settings.JWT_SECRET == INSECURE_DEV_SECRET:
             logger.warning(
                 "SECURITY WARNING: Running with default development JWT_SECRET. "
                 "For production environments, set a strong random JWT_SECRET in .env."

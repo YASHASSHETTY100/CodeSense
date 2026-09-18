@@ -2,15 +2,15 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: codesense
-      POSTGRES_PASSWORD: codesense
-      POSTGRES_DB: codesense
+      POSTGRES_USER: ${POSTGRES_USER:-codesense}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-codesense}
+      POSTGRES_DB: ${POSTGRES_DB:-codesense}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U codesense"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-codesense}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -26,46 +26,73 @@ services:
       retries: 10
 
   backend:
-    build: ../backend
-    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --workers 4
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+psycopg2://codesense:codesense@postgres:5432/codesense
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-codesense}:${POSTGRES_PASSWORD:-codesense}@postgres:5432/${POSTGRES_DB:-codesense}
       REDIS_URL: redis://redis:6379/0
+      CELERY_EAGER: "false"
+      REPO_STORAGE_DIR: /code/data/repos
+      DOC_OUTPUT_DIR: /code/data/docs
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
-      - ../backend:/code
       - repodata:/code/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   worker:
-    build: ../backend
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
     command: celery -A worker.celery_app.celery_app worker --loglevel=info
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+psycopg2://codesense:codesense@postgres:5432/codesense
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-codesense}:${POSTGRES_PASSWORD:-codesense}@postgres:5432/${POSTGRES_DB:-codesense}
       REDIS_URL: redis://redis:6379/0
+      CELERY_EAGER: "false"
+      REPO_STORAGE_DIR: /code/data/repos
+      DOC_OUTPUT_DIR: /code/data/docs
     depends_on:
-      - backend
-      - redis
-      - postgres
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     volumes:
-      - ../backend:/code
       - repodata:/code/data
 
   frontend:
-    build: ../frontend
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
     ports:
-      - "5173:5173"
+      - "5173:80"
+      - "80:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   pgdata:

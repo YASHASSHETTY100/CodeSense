@@ -1,4 +1,9 @@
-const BASE = (import.meta as any).env?.VITE_API || 'http://localhost:8000';
+const ENV_API = (import.meta as any).env?.VITE_API_URL || (import.meta as any).env?.VITE_API;
+const BASE = (ENV_API !== undefined && ENV_API !== null && ENV_API !== '')
+  ? ENV_API
+  : (typeof window !== 'undefined' && window.location.hostname === 'localhost'
+      ? 'http://localhost:8000'
+      : '');
 
 export function getToken(): string {
   return localStorage.getItem('token') || '';

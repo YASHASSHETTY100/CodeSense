@@ -26,10 +26,14 @@ def enqueue_ingest(project_id: int) -> None:
     """Run inline when Celery eager / Redis unavailable, else queue."""
     import app.config as cfg
     redis_up = False
-    if not cfg.settings.CELERY_EAGER:
+    if not cfg.settings.CELERY_EAGER and cfg.settings.REDIS_URL:
         try:
+            from urllib.parse import urlparse
             import socket
-            s = socket.create_connection(("127.0.0.1", 6379), timeout=0.3)
+            parsed = urlparse(cfg.settings.REDIS_URL)
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or 6379
+            s = socket.create_connection((host, port), timeout=0.5)
             s.close()
             redis_up = True
         except Exception:
