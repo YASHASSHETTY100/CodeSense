@@ -1,0 +1,169 @@
+{
+  "domains": {
+    "ecommerce": {
+      "domain_name": "E-Commerce (Django / Web)",
+      "repo_identifier": "django-ecommerce",
+      "questions": [
+        {
+          "id": "ecom_01",
+          "question": "How does the customer provide an address?",
+          "expected_status": "SUCCESS",
+          "category": "functional_paraphrase",
+          "expected_concepts": ["address", "checkout"]
+        },
+        {
+          "id": "ecom_02",
+          "question": "Where does the client enter their shipping location?",
+          "expected_status": "SUCCESS",
+          "category": "functional_paraphrase",
+          "expected_concepts": ["address", "checkout"]
+        },
+        {
+          "id": "ecom_03",
+          "question": "What happens after an order is placed?",
+          "expected_status": "SUCCESS",
+          "category": "workflow",
+          "expected_concepts": ["order"]
+        },
+        {
+          "id": "ecom_04",
+          "question": "Which API or route handles order creation?",
+          "expected_status": "SUCCESS",
+          "category": "api_route",
+          "expected_concepts": ["order", "checkout"]
+        },
+        {
+          "id": "ecom_05",
+          "question": "Where is customer address information stored in the database?",
+          "expected_status": "SUCCESS",
+          "category": "data_persistence",
+          "expected_concepts": ["address"]
+        },
+        {
+          "id": "ecom_06",
+          "question": "What validation is performed before checkout?",
+          "expected_status": "SUCCESS",
+          "category": "validation",
+          "expected_concepts": ["checkout"]
+        },
+        {
+          "id": "ecom_07",
+          "question": "Can a customer modify the delivery address after placing an order?",
+          "expected_status": "SUCCESS",
+          "category": "adversarial_post_state",
+          "expected_concepts": ["address", "order"]
+        },
+        {
+          "id": "ecom_08",
+          "question": "What happens when payment fails?",
+          "expected_status": "SUCCESS",
+          "category": "error_handling",
+          "expected_concepts": ["payment"]
+        },
+        {
+          "id": "ecom_09",
+          "question": "How is employee payroll processed?",
+          "expected_status": "INSUFFICIENT_EVIDENCE",
+          "category": "negative_unsupported",
+          "expected_concepts": []
+        },
+        {
+          "id": "ecom_10",
+          "question": "How does facial recognition work in this ecommerce codebase?",
+          "expected_status": "INSUFFICIENT_EVIDENCE",
+          "category": "negative_unsupported",
+          "expected_concepts": []
+        },
+        {
+          "id": "ecom_11",
+          "question": "How are purchase orders approved by the manager?",
+          "expected_status": "INSUFFICIENT_EVIDENCE",
+          "category": "negative_unsupported",
+          "expected_concepts": []
+        }
+      ]
+    },
+    "stock_analysis": {
+      "domain_name": "Stock / Financial Analysis",
+      "repo_identifier": "alphalens",
+      "questions": [
+        {
+          "id": "stock_01",
+          "question": "How are factor performance and cumulative returns calculated?",
+          "expected_status": "SUCCESS",
+          "category": "functional",
+          "expected_concepts": ["factor", "returns"]
+        },
+        {
+          "id": "stock_02",
+          "question": "Where is factor or price data cleaned and forward returns computed?",
+          "expected_status": "SUCCESS",
+          "category": "data_source",
+          "expected_concepts": ["factor", "returns"]
+        },
+        {
+          "id": "stock_03",
+          "question": "How does tear sheet creation and plotting work?",
+          "expected_status": "SUCCESS",
+          "category": "workflow",
+          "expected_concepts": ["tear sheet", "plotting"]
+        },
+        {
+          "id": "stock_04",
+          "question": "How are inpatient medical records encrypted?",
+          "expected_status": "INSUFFICIENT_EVIDENCE",
+          "category": "negative_unsupported",
+          "expected_concepts": []
+        },
+        {
+          "id": "stock_05",
+          "question": "How does shopping cart checkout process credit card refunds?",
+          "expected_status": "INSUFFICIENT_EVIDENCE",
+          "category": "negative_unsupported",
+          "expected_concepts": []
+        }
+      ]
+    },
+    "missing_person": {
+      "domain_name": "Missing Person / Computer Vision",
+      "repo_identifier": "FINDING-MISSING-PERSON",
+      "questions": [
+        {
+          "id": "cv_01",
+          "question": "How is a missing-person record created or submitted?",
+          "expected_status": "SUCCESS",
+          "category": "functional",
+          "expected_concepts": ["person", "report"]
+        },
+        {
+          "id": "cv_02",
+          "question": "How is an image processed for face detection and matching?",
+          "expected_status": "SUCCESS",
+          "category": "cv_pipeline",
+          "expected_concepts": ["image", "face"]
+        },
+        {
+          "id": "cv_03",
+          "question": "Where is the investigation result or matched person stored?",
+          "expected_status": "SUCCESS",
+          "category": "data_storage",
+          "expected_concepts": ["person", "report"]
+        },
+        {
+          "id": "cv_04",
+          "question": "How is employee annual bonus and payroll computed?",
+          "expected_status": "INSUFFICIENT_EVIDENCE",
+          "category": "negative_unsupported",
+          "expected_concepts": []
+        },
+        {
+          "id": "cv_05",
+          "question": "What is the delivery return policy for damaged merchandise?",
+          "expected_status": "INSUFFICIENT_EVIDENCE",
+          "category": "negative_unsupported",
+          "expected_concepts": []
+        }
+      ]
+    }
+  }
+}
