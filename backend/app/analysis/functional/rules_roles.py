@@ -51,8 +51,17 @@ def run_role_rule_detection(db: Session, project_id: int, repo_dir: str,
         for pat, kind in ROLE_PATTERNS:
             m = pat.search(snippet) or pat.search(text[:8000])
             if m:
-                names = ROLE_NAME_RE.findall(snippet) or ["authenticated"]
-                for rname in set(x.lower() for x in names):
+                raw_names = ROLE_NAME_RE.findall(snippet)
+                # Filter out admin class names and non-roles
+                valid_roles = []
+                for n in raw_names:
+                    nl = n.lower()
+                    if nl.endswith("_admin") or nl.endswith("admin") and len(nl) > 7:
+                        # e.g. order_admin, addressadmin -> admin
+                        nl = "admin"
+                    if nl not in ("authenticated", "anonymous", "auth", "isauthenticated"):
+                        valid_roles.append(nl)
+                for rname in set(valid_roles):
                     roles_found.setdefault(rname, set()).add(sf.path)
                 # attach to endpoint if this symbol is a handler
                 ep = db.query(ApiEndpoint).filter(
@@ -63,7 +72,7 @@ def run_role_rule_detection(db: Session, project_id: int, repo_dir: str,
                         cur = json.loads(ep.roles_allowed or "[]")
                     except Exception:
                         cur = []
-                    ep.roles_allowed = json.dumps(sorted(set(cur) | {x.lower() for x in names}))
+                    ep.roles_allowed = json.dumps(sorted(set(cur) | set(valid_roles)))
                     ep.auth_required = "yes"
                     db.add(ep)
                 break

@@ -512,162 +512,9 @@ def _build_functional_answer(question: str, ev: list[dict], kept: list[dict], dr
 
 
 def answer_functional_question(db: Session, project_id: int, question: str, user_id: int = 0, history: list[dict] | None = None) -> dict:
-    from app.analysis.query_intent import analyze_query
-    qi = analyze_query(question, history=history)
-
-    # Check if question is an unresolved ambiguous pronoun query
-    if qi.is_ambiguous:
-        clarification_msg = qi.clarification_prompt or "Could you please clarify which feature or domain entity you are referring to?"
-        res = {
-            "status": "INSUFFICIENT_EVIDENCE",
-            "answer": clarification_msg,
-            "current_behaviour": "Ambiguous reference without prior context.",
-            "functional_flow": [],
-            "business_rules": [],
-            "affected_modules": [],
-            "evidence": [],
-            "confidence": "None",
-            "reason": "ambiguous_question",
-            "missing_concepts": ["clarification required"],
-            "gaps": [clarification_msg],
-            "guard_dropped": 0,
-        }
-        return res
-
-    effective_question = qi.resolved_query or question
-
-    # Ambiguity check for broad questions with multiple candidate repository workflows
-    p_dir = project_dir(project_id)
-    vocab_path = os.path.join(p_dir, "domain_vocabulary.json")
-    if os.path.exists(vocab_path):
-        try:
-            from app.domain_vocabulary import RepositoryDomainVocabulary
-            vocab = RepositoryDomainVocabulary.load(vocab_path)
-            q_l = effective_question.lower()
-            if any(p in q_l for p in ["how are ", "how is ", "how do we handle ", "how does the system handle "]) and any(w in q_l for w in ["handle", "handled", "manage", "managed", "deal", "dealt"]):
-                matched = vocab.find_matching_concepts(q_l)
-                if matched:
-                    top_mc = matched[0]
-                    workflows = list(top_mc.related_workflows)
-                    if not workflows and top_mc.related_concepts:
-                        workflows = [f"{top_mc.canonical_name}_{rel}" for rel in list(top_mc.related_concepts)[:4]]
-                    if len(workflows) >= 2:
-                        wf_list_str = "\n".join(f"- **{wf.replace('_', ' ').title()}**" for wf in workflows[:4])
-                        ambiguous_answer = (
-                            f"In this repository, **{top_mc.canonical_name.replace('_', ' ').title()}** is associated with multiple distinct functional workflows:\n\n"
-                            f"{wf_list_str}\n\n"
-                            f"Because multiple implementations exist, please clarify which specific workflow or operation you would like to explore."
-                        )
-                        res = {
-                            "status": "SUCCESS",
-                            "answer": ambiguous_answer,
-                            "current_behaviour": f"Multiple repository-supported workflows exist for {top_mc.canonical_name}.",
-                            "functional_flow": [f"Candidate workflow: {wf.replace('_', ' ').title()}" for wf in workflows[:4]],
-                            "business_rules": [],
-                            "affected_modules": [],
-                            "evidence": [],
-                            "confidence": "Medium",
-                            "reason": "multiple_repository_interpretations",
-                            "missing_concepts": [],
-                            "gaps": ["Multiple repository workflows match this concept; user clarification requested."],
-                            "guard_dropped": 0,
-                            "ambiguity_candidates": workflows[:4],
-                        }
-                        db.add(QueryLog(project_id=project_id, user_id=user_id or 0, question=question,
-                                        answer=res["answer"][:8000], evidence_refs_json="[]"))
-                        db.commit()
-                        return res
-        except Exception:
-            pass
-
-    # Multi-intent decomposition check
-    is_multi_intent = bool(getattr(qi, "query_plan", {}).get("is_multi_intent", False))
-    sub_queries = getattr(qi, "query_plan", {}).get("sub_queries", []) if is_multi_intent else []
-
-    if is_multi_intent and len(sub_queries) > 1:
-        ev = []
-        seen_refs = set()
-        for sq in sub_queries:
-            sub_ev = retrieve(db, project_id, sq, top_k=6)
-            for item in sub_ev:
-                ref_key = (item.get("source_ref"), item.get("text", "")[:100])
-                if ref_key not in seen_refs:
-                    seen_refs.add(ref_key)
-                    ev.append(item)
-        if not ev:
-            ev = retrieve(db, project_id, effective_question, top_k=12)
-    else:
-        ev = retrieve(db, project_id, effective_question, top_k=12)
-
-    # Evidence sufficiency gate
-    if not ev:
-        catalog = get_project_catalog(db, project_id)
-        is_suff, reason, missing = evaluate_sufficiency(db, project_id, effective_question, [], catalog)
-        missing_str = ", ".join(missing) if missing else "the requested domain concept"
-        ans_msg = (
-            f"The analyzed codebase does not contain sufficient evidence regarding '{question}'. "
-            f"No matching implementations, endpoints, or business rules were found for {missing_str}."
-        )
-        res = {
-            "status": "INSUFFICIENT_EVIDENCE",
-            "answer_status": "INSUFFICIENT_EVIDENCE",
-            "answer": redact_secrets(ans_msg),
-            "current_behaviour": "No evidenced behavior found in the codebase.",
-            "functional_flow": [],
-            "business_rules": [],
-            "affected_modules": [],
-            "evidence": [],
-            "claims_grounding": [],
-            "confidence": "None",
-            "reason": reason,
-            "missing_concepts": missing,
-            "gaps": [f"No implementation or evidence found for {missing_str}."],
-            "guard_dropped": 0,
-        }
-        db.add(QueryLog(project_id=project_id, user_id=user_id or 0, question=question,
-                        answer=res["answer"][:8000], evidence_refs_json="[]"))
-        db.commit()
-        return res
-
-    claims = _ev_to_claims(ev)
-    kept, dropped = check_evidence(claims, ev)
-    facts = _facts(db, project_id)
-    repo_overview = facts.get("repo_overview", "")
-
-    try:
-        raw = llm_complete(templates.FUNCTIONAL_QA.render(
-            question=effective_question,
-            retrieved_evidence_chunks=json.dumps(ev)[:14000]), "")
-        m = re.search(r"\{.*\}", raw, re.S)
-        if m:
-            data = json.loads(m.group(0))
-            llm_kept, llm_dropped = check_evidence(data.get("evidence", []), ev)
-            data["evidence"] = llm_kept
-            data["guard_dropped"] = llm_dropped
-            data["status"] = "SUCCESS"
-            # Ensure 6 dimensions exist
-            fb = _build_functional_answer(effective_question, ev, llm_kept, llm_dropped, repo_overview=repo_overview)
-            for k in ["current_behaviour", "functional_flow", "business_rules", "affected_modules", "confidence"]:
-                if k not in data:
-                    data[k] = fb[k]
-            data["query_plan"] = fb.get("query_plan", {})
-            data["intents"] = fb.get("intents", [])
-            data["primary_intent"] = fb.get("primary_intent", "HOW_IT_WORKS")
-            # Redact secrets
-            data["answer"] = redact_secrets(data.get("answer", ""))
-            db.add(QueryLog(project_id=project_id, user_id=user_id or 0, question=question,
-                            answer=data["answer"][:8000], evidence_refs_json=json.dumps(llm_kept[:12])))
-            db.commit()
-            return data
-    except _OfflineSignal:
-        pass
-
-    # Offline / extractive fallback
-    fb = _build_functional_answer(effective_question, ev, kept, dropped, repo_overview=repo_overview)
-    db.add(QueryLog(project_id=project_id, user_id=user_id or 0, question=question,
-                    answer=fb["answer"][:8000], evidence_refs_json=json.dumps(kept[:12])))
-    db.commit()
-    return fb
+    """Answer functional questions via the agentic investigation loop."""
+    from app.reasoning.repository_question_agent import investigate_question
+    return investigate_question(db, project_id, question, user_id=user_id, history=history)
 
 
 def trace_flow(db: Session, project_id: int, question: str, user_id: int = 0) -> dict:
@@ -964,13 +811,20 @@ def generate_suggested_questions(db: Session, project_id: int) -> list[str]:
         if clean and clean not in ents:
             ents.append(clean)
 
-    # Discard parser artifacts and non-domain terms
+    # Discard parser artifacts, admin class artifacts, and non-domain terms
     BAD_TERMS = {
         "Authenticated", "Anonymous", "Admin Role", "User Role", "Item",
         "Item Records", "Root", "Index", "App", "User Profile", "Unknown",
-        "Base", "Core", "Model", "View", "Form", "Object"
+        "Base", "Core", "Model", "View", "Form", "Object", "Admin",
+        "Order Admin", "Address Admin", "Site Admin"
     }
-    ents = [e for e in ents if e not in BAD_TERMS]
+    ents = [e for e in ents if e not in BAD_TERMS and not e.endswith(" Admin")]
+    roles = [
+        r for r in roles
+        if r and r.lower() not in ("authenticated", "anonymous", "auth", "isauthenticated")
+        and not r.lower().endswith("_admin")
+        and not (r.lower().endswith("admin") and len(r) > 7)
+    ]
 
     # Ground via Domain Vocabulary if present
     p_dir = project_dir(project_id)

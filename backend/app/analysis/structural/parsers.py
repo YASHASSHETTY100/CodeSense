@@ -25,11 +25,15 @@ def parse_python(source: str) -> list[Symbol]:
                                   f"class {node.name}", ast.get_docstring(node) or ""))
                 base_names = [b.id for b in node.bases if isinstance(b, ast.Name)] + \
                              [b.attr for b in node.bases if isinstance(b, ast.Attribute)]
-                if any(b in ("Base", "Model", "SQLModel", "DeclarativeBase") or "Model" in b for b in base_names):
-                    out.append(Symbol("model", node.name, node.lineno,
-                                      getattr(node, "end_lineno", node.lineno) or node.lineno,
-                                      f"class {node.name}", ast.get_docstring(node) or ""))
-                if any("Form" in b for b in base_names):
+                is_admin_class = node.name.endswith("Admin") or any("Admin" in b or "Inline" in b for b in base_names)
+                is_serializer = any("Serializer" in b for b in base_names)
+                is_form = any("Form" in b for b in base_names)
+                if not is_admin_class and not is_serializer and not is_form:
+                    if any(b in ("Base", "Model", "SQLModel", "DeclarativeBase", "AbstractBaseUser") or (b.endswith("Model") and not b.endswith("ViewModel")) for b in base_names):
+                        out.append(Symbol("model", node.name, node.lineno,
+                                          getattr(node, "end_lineno", node.lineno) or node.lineno,
+                                          f"class {node.name}", ast.get_docstring(node) or ""))
+                if is_form or any("Form" in b for b in base_names):
                     out.append(Symbol("form", node.name, node.lineno,
                                       getattr(node, "end_lineno", node.lineno) or node.lineno,
                                       f"class {node.name}", ast.get_docstring(node) or ""))
@@ -70,8 +74,10 @@ def parse_python(source: str) -> list[Symbol]:
     # models: SQLAlchemy / Django / SQLModel
     for m in re.finditer(r"class\s+(\w+)\((?:Base|Model|models\.Model|SQLModel)[^)]*\)", source):
         line = source[:m.start()].count("\n") + 1
-        if not any(s.kind == "model" and s.name == m.group(1) for s in out):
-            out.append(Symbol("model", m.group(1), line, line, m.group(0)))
+        name = m.group(1)
+        if not name.endswith("Admin") and "ModelAdmin" not in m.group(0):
+            if not any(s.kind == "model" and s.name == name for s in out):
+                out.append(Symbol("model", name, line, line, m.group(0)))
     return out
 
 

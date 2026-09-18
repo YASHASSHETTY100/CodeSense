@@ -66,6 +66,8 @@ def run_entity_extraction(db: Session, project_id: int, repo_dir: str) -> int:
     # 1. Application code models (SQLAlchemy, Django, etc.)
     for m in models:
         sf = files.get(m.source_file_id)
+        if m.name.endswith("Admin") or (sf and ("admin.py" in sf.path.lower() or "/admin/" in sf.path.lower() or "\\admin\\" in sf.path.lower())):
+            continue
         fields: list[str] = []
         relations: list[str] = []
         if sf:

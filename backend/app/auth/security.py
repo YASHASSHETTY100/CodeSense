@@ -3,6 +3,10 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timedelta
 from jose import jwt
+import bcrypt
+if not hasattr(bcrypt, "__about__"):
+    bcrypt.__about__ = type("about", (), {"__version__": getattr(bcrypt, "__version__", "4.0.0")})
+
 from passlib.context import CryptContext
 from cryptography.fernet import Fernet, InvalidToken
 from app.config import settings

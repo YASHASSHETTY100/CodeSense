@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { api, BASE } from '../api-client/client';
+import { api, BASE, downloadFile } from '../api-client/client';
 import { Navbar } from '../components/Navbar';
 import { StatusBadge } from '../components/StatusBadge';
 import { ConfidenceBadge } from '../components/ConfidenceBadge';
@@ -246,12 +246,25 @@ export function Dashboard() {
         date: new Date().toLocaleTimeString(),
       };
       setGeneratedDocs(prev => [newDoc, ...prev]);
-      window.open(newDoc.url, '_blank');
+      try {
+        await downloadFile(newDoc.url, `functional_specification_${newDoc.id}.${fmt}`);
+      } catch (dlErr: any) {
+        console.error('Auto-download error:', dlErr);
+      }
     } catch (e: any) {
       setDocError(e.message || 'Document generation failed.');
     } finally {
       setDocLoading(false);
       setDocFormatLoading(null);
+    }
+  }
+
+  async function handleDownloadDoc(doc: { url: string; format: string; id: number }) {
+    try {
+      const filename = `functional_specification_${doc.id}.${doc.format.toLowerCase()}`;
+      await downloadFile(doc.url, filename);
+    } catch (err: any) {
+      setDocError(`Download failed: ${err.message || err}`);
     }
   }
 
@@ -283,7 +296,11 @@ export function Dashboard() {
           date: new Date().toLocaleTimeString(),
         };
         setGeneratedDocs(prev => [docxItem, pdfItem, ...prev]);
-        window.open(docxItem.url, '_blank');
+        try {
+          await downloadFile(docxItem.url, `functional_specification_${docxItem.id}.docx`);
+        } catch (dlErr: any) {
+          console.error('Auto-download error:', dlErr);
+        }
       }
     } catch (e: any) {
       setDocError(e.message || 'Failed to generate complete specification bundle.');
@@ -1447,14 +1464,14 @@ export function Dashboard() {
                             <StatusBadge status="READY" />
                           </td>
                           <td style={{ textAlign: 'right' }}>
-                            <a
-                              href={doc.url}
-                              target="_blank"
-                              rel="noreferrer"
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadDoc(doc)}
                               className="btn btn-outline btn-sm"
+                              id={`download-${doc.format.toLowerCase()}-${doc.id}`}
                             >
                               DOWNLOAD {doc.format} ⬇
-                            </a>
+                            </button>
                           </td>
                         </tr>
                       ))}

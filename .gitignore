@@ -63,3 +63,4 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
+qa-results/downloads/*

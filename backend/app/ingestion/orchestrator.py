@@ -165,6 +165,27 @@ def run_ingestion(db: Session, project_id: int, incremental: bool = True) -> Non
     project = db.query(Project).filter(Project.id == project_id).one()
     cred = decrypt_credential(project.auth_credential_ref or "")
 
+    # Clear any project in-memory and disk caches
+    try:
+        from app.analysis.application_intelligence import clear_aim_cache
+        clear_aim_cache(project.id)
+    except Exception:
+        pass
+    try:
+        from app.domain_vocabulary import clear_vocab_cache
+        clear_vocab_cache(project.id)
+    except Exception:
+        pass
+    try:
+        from app.knowledge_graph import clear_graph_cache
+        clear_graph_cache(project.id)
+    except Exception:
+        pass
+    project.summary_cache = ""
+    project.suggested_questions_cache = ""
+    db.add(project)
+    db.commit()
+
     try:
         # Stage 1: Connecting
         set_status(db, project, "connecting", 5, "Connecting to repository and validating provider...")

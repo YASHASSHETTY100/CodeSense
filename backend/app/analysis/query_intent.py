@@ -103,6 +103,13 @@ STOPWORDS = {
     "handle", "handles", "handled", "handling",
     "perform", "performs", "performed", "performing",
     "record", "records", "recorded", "recording",
+    "trace", "traces", "traced", "tracing",
+    "track", "tracks", "tracked", "tracking",
+    "walk", "walks", "walked", "walking", "walkthrough",
+    "describe", "describes", "described", "describing", "description",
+    "explain", "explains", "explained", "explaining", "explanation",
+    "list", "lists", "listed", "listing",
+    "outline", "outlines", "outlined", "outlining",
     # Generic filler nouns & adverbs/adjectives
     "thing", "things", "way", "ways", "step", "steps",
     "app", "application", "codebase", "project", "system", "repository", "repo",

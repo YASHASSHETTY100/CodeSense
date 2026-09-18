@@ -16,7 +16,7 @@ from app.analysis.security import redact_secrets
 from app.auth.security import encrypt_credential, decrypt_credential, hash_password, create_token
 from cryptography.fernet import Fernet
 from app.models.database import SessionLocal
-from app.models.models import User, Project, UserProjectAccess, GeneratedDocument
+from app.models.models import User, Project, UserProjectAccess, GeneratedDocument, Base
 
 
 @pytest.fixture
@@ -98,7 +98,9 @@ def test_safe_error_handler_prevents_traceback_leak():
 
 def test_document_download_path_traversal_and_existence(client):
     """Verify document download protects against unauthorized access, missing files, and path traversal."""
-    db = SessionLocal()
+    import app.models.database as dbmod
+    Base.metadata.create_all(bind=dbmod.engine)
+    db = dbmod.SessionLocal()
     try:
         # Create or fetch user and project
         u = db.query(User).filter(User.email == "secuser@example.com").first()

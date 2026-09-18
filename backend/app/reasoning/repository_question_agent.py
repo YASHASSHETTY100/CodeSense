@@ -377,25 +377,28 @@ def _step_detect_contradictions(ctx: InvestigationContext) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 8: CALIBRATE CONFIDENCE
-# ---------------------------------------------------------------------------
-
 def _step_calibrate_confidence(ctx: InvestigationContext) -> None:
-    """Multi-layer confidence scoring based on evidence depth and consistency."""
+    """Multi-layer confidence scoring based on evidence depth, specificity, and consistency (Rule 6)."""
     retrieval_count = len(ctx.retrieval_evidence)
     aim_count = len(ctx.aim_evidence)
     supplementary_count = len(ctx.supplementary_evidence)
-    total = retrieval_count + aim_count + supplementary_count
+    verified_count = len(ctx.verified_claims)
+    total_evidence = retrieval_count + aim_count + supplementary_count + verified_count
 
-    if total == 0:
+    if total_evidence == 0:
         ctx.confidence = "None"
-    elif retrieval_count >= 2 and (aim_count >= 1 or supplementary_count >= 1):
+        return
+
+    # Check for contradictions or unknown gaps
+    has_unknown_gaps = any(g.startswith("**Unknown:**") for g in ctx.gaps)
+    if ctx.contradictions or has_unknown_gaps or (ctx.dropped_claims > 0 and ctx.dropped_claims >= max(1, verified_count)):
+        ctx.confidence = "Medium" if (retrieval_count or verified_count) else "Low"
+        return
+
+    # High confidence: requires solid evidence depth
+    if (retrieval_count >= 2 or verified_count >= 2) and (aim_count >= 1 or supplementary_count >= 1 or retrieval_count >= 2 or verified_count >= 2):
         ctx.confidence = "High"
-    elif retrieval_count >= 2 or (retrieval_count >= 1 and aim_count >= 1):
-        ctx.confidence = "High"
-    elif retrieval_count >= 1:
-        ctx.confidence = "Medium"
-    elif aim_count >= 1 or supplementary_count >= 1:
+    elif retrieval_count >= 1 or verified_count >= 1 or aim_count >= 1:
         ctx.confidence = "Medium"
     else:
         ctx.confidence = "Low"
@@ -445,49 +448,94 @@ def _step_extract_modules(ctx: InvestigationContext) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Step 11: EXTRACT BUSINESS RULES & FLOW STEPS
 # ---------------------------------------------------------------------------
 
 def _step_extract_rules_and_flow(ctx: InvestigationContext) -> None:
-    """Extract business rules and functional flow steps from evidence."""
+    """Extract concrete business rules and dynamic execution flow steps from repository evidence."""
     ev = ctx.merged_evidence
 
-    # Business rules
+    # 1. Business rules extraction
     for e in ev:
         t = e.get("text", "")
         ref = e.get("source_ref", "")
-        if any(term in ref or term in t for term in ["rule:", "validation", "raise ValueError", "raise ValidationError"]):
-            rule_desc = t.replace("Business rule:", "").strip().split("\n")[0][:250]
-            if rule_desc and rule_desc not in ctx.business_rules:
-                ctx.business_rules.append(rule_desc)
+        if any(term in ref or term in t for term in ["rule:", "validation", "raise ValueError", "raise ValidationError", "PermissionDenied", "assert "]):
+            for line in t.splitlines():
+                ls = line.strip()
+                if any(k in ls for k in ["raise ", "assert ", "if not ", "is_valid", "validate_"]):
+                    rule_clean = ls.replace("raise ", "").replace("Business rule:", "").strip()
+                    if rule_clean and rule_clean not in ctx.business_rules:
+                        ctx.business_rules.append(rule_clean[:200])
+                        break
+            if len(ctx.business_rules) >= 6:
+                break
     ctx.business_rules = ctx.business_rules[:6]
 
-    # Flow steps
-    routes = [e for e in ev if "endpoint:" in e.get("source_ref", "") or any(w in e.get("text", "") for w in ["@router", "app.", "route"])]
-    handlers = [e for e in ev if any(w in e.get("text", "") for w in ["def ", "function "])]
-    validators = [e for e in ev if any(w in e.get("text", "") for w in ["raise ", "validation"])]
-    db_ops = [e for e in ev if any(w in e.get("text", "") for w in ["db.session", "Column", "INSERT", "add("])]
+    # 2. Dynamic execution flow steps
+    routes = [e for e in ev if "endpoint:" in e.get("source_ref", "") or any(w in e.get("text", "") for w in ["@router", "app.", "@app.", "apirouter"]) or any(w in e.get("source_ref", "").lower() for w in ["route", "views.py", "endpoints"])]
+    handlers = [e for e in ev if any(w in e.get("text", "") for w in ["def ", "function "]) and not any(w in e.get("source_ref", "").lower() for w in ["test", "migration"])]
+    validators = [e for e in ev if any(w in e.get("text", "") for w in ["raise ", "validation", "assert ", "is_valid"])]
+    db_ops = [e for e in ev if any(w in e.get("text", "") for w in ["db.session", "Column", "INSERT", "add(", "commit()", "create table", "save()"])]
+    integrations = [e for e in ev if any(w in e.get("text", "").lower() for w in ["client", "service", "webhook", "http", "requests", "stripe", "smtp", "sendmail", "celery", "task"])]
 
+    flow: list[str] = []
     step_num = 1
+
+    # Step: Initiation / Entry Point
     if routes:
-        route_name = routes[0]["source_ref"].split(":")[-1] if ":" in routes[0]["source_ref"] else routes[0]["source_ref"]
-        ctx.flow_steps.append(f"{step_num}. The user's request is received at the application entry point (`{route_name}`)")
+        r_ref = routes[0]["source_ref"]
+        r_sym = r_ref.split(":")[-1] if ":" in r_ref else r_ref.split("#")[-1]
+        flow.append(f"{step_num}. **Initiation:** The action is triggered via entry point `{r_sym}`, dispatching incoming parameters.")
         step_num += 1
-    if handlers:
-        h_name = handlers[0]["source_ref"].split(":")[-1]
-        ctx.flow_steps.append(f"{step_num}. The request is processed by the handler function `{h_name}`")
-        step_num += 1
-    if validators:
-        ctx.flow_steps.append(f"{step_num}. Input data is validated against business rules and constraints")
-        step_num += 1
-    if db_ops:
-        ctx.flow_steps.append(f"{step_num}. The validated data is stored in the database")
+    elif handlers:
+        h_ref = handlers[0]["source_ref"]
+        h_sym = h_ref.split(":")[-1] if ":" in h_ref else h_ref.split("#")[-1]
+        flow.append(f"{step_num}. **Initiation:** The workflow initiates by invoking `{h_sym}`.")
         step_num += 1
 
-    if not ctx.flow_steps:
-        for i, e in enumerate(ev[:4], 1):
+    # Step: Validation & Rules
+    if validators:
+        v_text = validators[0].get("text", "")
+        v_lines = [ln.strip() for ln in v_text.splitlines() if any(k in ln for k in ["raise ", "if ", "assert "])]
+        v_snippet = v_lines[0][:100] if v_lines else "input data and domain constraints"
+        flow.append(f"{step_num}. **Validation:** The system evaluates constraints (`{v_snippet}`) before allowing state updates.")
+        step_num += 1
+    elif ctx.business_rules:
+        flow.append(f"{step_num}. **Validation:** Input is verified against business rule: `{ctx.business_rules[0][:100]}`.")
+        step_num += 1
+
+    # Step: Core Business Logic Processing
+    if handlers:
+        target_h = handlers[1] if len(handlers) > 1 and routes else handlers[0]
+        h_ref = target_h["source_ref"]
+        h_sym = h_ref.split(":")[-1] if ":" in h_ref else h_ref.split("#")[-1]
+        flow.append(f"{step_num}. **Processing:** `{h_sym}` executes domain logic, orchestrating internal state transitions.")
+        step_num += 1
+
+    # Step: Persistence
+    if db_ops:
+        db_ref = db_ops[0]["source_ref"]
+        db_sym = db_ref.split(":")[-1] if ":" in db_ref else db_ref.split("#")[-1]
+        flow.append(f"{step_num}. **Persistence:** Updated entity state is committed to storage via `{db_sym}`.")
+        step_num += 1
+
+    # Step: Downstream / Events / Integrations
+    if integrations:
+        int_ref = integrations[0]["source_ref"]
+        int_sym = int_ref.split(":")[-1] if ":" in int_ref else int_ref.split("#")[-1]
+        flow.append(f"{step_num}. **Downstream Operations:** External services or notifications are coordinated by `{int_sym}`.")
+        step_num += 1
+
+    # Step: Final State / Confirmation
+    flow.append(f"{step_num}. **Completion:** The operation finishes and returns resulting status or payload to the client.")
+
+    if len(flow) < 3:
+        for i, e in enumerate(ev[:3], start=len(flow) + 1):
             ref_name = e["source_ref"].split(":")[-1] if ":" in e["source_ref"] else e["source_ref"].split("/")[-1]
-            ctx.flow_steps.append(f"{i}. Processing involves `{ref_name}`")
+            flow.append(f"{i}. **Execution:** Implementation logic coordinates through `{ref_name}`.")
+
+    ctx.flow_steps = flow[:6]
 
 
 # ---------------------------------------------------------------------------
@@ -537,82 +585,120 @@ def _step_analyze_gaps(ctx: InvestigationContext) -> None:
 # ---------------------------------------------------------------------------
 
 def _build_business_explanation(ctx: InvestigationContext, repo_overview: str = "") -> str:
-    """Generate a PM/BA-friendly business explanation based on query intent."""
+    """Generate a direct, repository-grounded business answer in understandable language (Rules 2, 11)."""
     module_desc = ", ".join(ctx.affected_modules) if ctx.affected_modules else "core application"
     intents = ctx.intents
-
-    has_role_intent = any(i in intents for i in ["PERMISSION_AUTH", "USER_ROLE"])
-    has_workflow_intent = any(i in intents for i in ["WORKFLOW", "HOW_IT_WORKS", "LIFECYCLE_STATUS"])
-
-    if has_role_intent and has_workflow_intent:
-        role_part = (
-            f"**Roles & Permissions:** Access control and user authorization govern this capability across the **{module_desc}** module(s). "
-            f"The system verifies role permissions before permitting actions to proceed."
-        )
-        workflow_part = (
-            f"**Workflow & Downstream Execution:** Once authorized, the operational flow coordinates input validation, "
-            f"commits state updates to persistent data storage, and triggers downstream event notifications across the **{module_desc}** module(s)."
-        )
-        return f"{role_part}\n\n{workflow_part}"
-
     qi = ctx.query_intent
-    if qi and qi.intent == "purpose" and repo_overview:
+    entities = qi.entities if qi and qi.entities else []
+    roles = qi.roles if qi and qi.roles else []
+    primary_entity = entities[0] if entities else "the requested feature"
+    actor = roles[0].title() if roles else "A user"
+
+    # Purpose question
+    if (qi and qi.intent == "purpose") or "PURPOSE" in intents:
+        if repo_overview:
+            return f"{repo_overview.strip()}\n\nFunctionally, this system coordinates domain logic across the **{module_desc}** module(s)."
+        return f"This application is an enterprise system built to manage and automate operations across the **{module_desc}** module(s)."
+
+    # Data / Database question
+    if any(i in intents for i in ["DATABASE", "DATA_ENTITY"]):
+        db_symbols = [e.get("source_ref", "") for e in ctx.merged_evidence if any(w in e.get("source_ref", "").lower() or w in e.get("text", "").lower() for w in ["model", "table", "column", "entity", "sql"])]
+        sym_name = db_symbols[0].split(":")[-1] if db_symbols else primary_entity
         return (
-            f"**Application Purpose & Executive Summary:**\n\n{repo_overview}\n\n"
-            f"**Functional Scope:** This system is organized around the **{module_desc}** module(s) to automate and support core operational workflows."
+            f"In this repository, **{primary_entity}** data is stored and modeled in `{sym_name}` within the **{module_desc}** module. "
+            f"The database layer defines persistent entity fields, primary keys, and data relationships to maintain transactional integrity."
         )
 
-    intent_templates = {
-        ("WORKFLOW", "HOW_IT_WORKS"): (
-            f"**Workflow Overview:** The system executes this operational process across the **{module_desc}** module(s). "
-            f"Incoming requests are received at application entry points, evaluated against domain business rules, "
-            f"committed to persistent data storage, and coordinated with downstream components."
-        ),
-        ("DATABASE", "DATA_ENTITY"): (
-            f"**Data Model & Storage:** Data persistence for this feature is managed within the **{module_desc}** data structures. "
-            f"The application schemas define entity models, field attributes, constraints, and relationships maintained in the database layer."
-        ),
-        ("PERMISSION_AUTH", "USER_ROLE"): (
-            f"**Access Control & Roles:** Security policies and user authorization govern this capability across the **{module_desc}** module(s). "
-            f"The system verifies user roles and permissions before allowing sensitive actions or access to protected data."
-        ),
-        ("API",): (
-            f"**API & Service Endpoints:** The application exposes structured API routes in the **{module_desc}** module(s) "
-            f"enabling clients, frontends, or external systems to dispatch actions and query state."
-        ),
-        ("INTEGRATION",): (
-            f"**External Integrations:** Third-party connectivity in the **{module_desc}** module(s) connects application logic "
-            f"with external services, APIs, and background notification channels."
-        ),
-        ("ERROR_HANDLING",): (
-            f"**Resilience & Error Handling:** System stability is safeguarded through input validations, exception handlers, "
-            f"and error responses within the **{module_desc}** module(s) to guarantee graceful recovery."
-        ),
-        ("VALIDATION", "WHY_BUSINESS_RULE"): (
-            f"**Business Logic & Validation:** Domain constraints and validation rules are enforced within the **{module_desc}** module(s) "
-            f"to uphold data integrity and reject invalid requests before persistence."
-        ),
-        ("CAPABILITY", "FEATURE"): (
-            f"**Functional Capability:** The system provides specialized domain capabilities in the **{module_desc}** module(s), "
-            f"coordinating business operations, state tracking, and record handling."
-        ),
-        ("NOTIFICATION",): (
-            f"**Notifications & Alerts:** The **{module_desc}** module(s) handle notification dispatch including "
-            f"email, SMS, or in-app alerts triggered by domain events and state transitions."
-        ),
-        ("LIFECYCLE_STATUS",): (
-            f"**Lifecycle & State Management:** Entity lifecycle and status transitions are tracked within the **{module_desc}** module(s), "
-            f"enforcing valid state progressions with guard conditions."
-        ),
-    }
+    # API / Endpoint question
+    if "API" in intents:
+        endpoints = [e.get("source_ref", "") for e in ctx.merged_evidence if "endpoint:" in e.get("source_ref", "") or any(w in e.get("text", "").lower() for w in ["@router", "@app.", "apirouter"])]
+        ep_name = endpoints[0].replace("endpoint:", "") if endpoints else f"the `{primary_entity}` route"
+        return (
+            f"The application exposes `{ep_name}` in the **{module_desc}** module to handle this operation. "
+            f"Incoming requests are received, parsed, and routed to backend handlers for processing."
+        )
 
-    for intent_group, template in intent_templates.items():
-        if any(i in intents for i in intent_group):
-            return template
+    # Roles / Permissions question
+    if any(i in intents for i in ["PERMISSION_AUTH", "USER_ROLE"]):
+        auth_items = [e.get("source_ref", "") for e in ctx.merged_evidence if any(w in e.get("text", "").lower() for w in ["permission", "role", "is_admin", "login", "auth"])]
+        auth_src = auth_items[0].split(":")[-1] if auth_items else "access guard rules"
+        return (
+            f"Access and execution permissions for **{primary_entity}** are governed by security policies in `{auth_src}`. "
+            f"The application evaluates caller privileges before permitting operations to proceed."
+        )
 
+    # Error handling question
+    if "ERROR_HANDLING" in intents:
+        err_items = [e.get("source_ref", "") for e in ctx.merged_evidence if any(w in e.get("text", "").lower() for w in ["raise ", "except ", "error"])]
+        err_src = err_items[0].split(":")[-1] if err_items else "validation handlers"
+        return (
+            f"The application manages errors for **{primary_entity}** through structured guard clauses in `{err_src}`. "
+            f"Invalid inputs or runtime exceptions trigger error handling logic, returning informative rejection status."
+        )
+
+    # Integrations question
+    if "INTEGRATION" in intents:
+        int_items = [e.get("source_ref", "") for e in ctx.merged_evidence if any(w in e.get("text", "").lower() for w in ["client", "service", "webhook", "stripe", "smtp", "requests"])]
+        int_src = int_items[0].split(":")[-1] if int_items else "external service adapters"
+        return (
+            f"External system communication for **{primary_entity}** is managed through `{int_src}` in the **{module_desc}** module, "
+            f"coordinating external API calls, background notification dispatch, and third-party data exchange."
+        )
+
+    # Functional workflow question (e.g. "What happens when a customer checks out?")
+    primary_handler = ""
+    for e in ctx.merged_evidence:
+        ref = e.get("source_ref", "")
+        if any(w in ref.lower() for w in ["checkout", "order", "process", "submit", "handle", "service", "views"]):
+            primary_handler = ref.split(":")[-1] if ":" in ref else ref.split("#")[-1]
+            break
+    if not primary_handler and ctx.merged_evidence:
+        primary_handler = ctx.merged_evidence[0]["source_ref"].split(":")[-1]
+
+    rule_note = f" Validations such as `{ctx.business_rules[0][:80]}` are enforced." if ctx.business_rules else ""
     return (
-        f"**Functional Overview:** Based on repository analysis, this capability is implemented across the **{module_desc}** module(s) "
-        f"with defined business logic and persistent state."
+        f"When {actor.lower()} triggers this workflow, the application processes the action through `{primary_handler}` in the **{module_desc}** module.{rule_note} "
+        f"The workflow coordinates input verification, updates persistent repository records, and returns the resulting state to the caller."
+    )
+
+
+def _build_technical_implementation(ctx: InvestigationContext) -> str:
+    """Provide concrete implementation details for technical questions."""
+    lines = []
+    for item in ctx.verified_claims[:4]:
+        f = item.get("file", "")
+        sym = item.get("symbol", "")
+        txt = item.get("text", "")
+        first_line = [l.strip() for l in txt.splitlines() if l.strip() and not l.strip().startswith("#")][:1]
+        snippet = first_line[0][:120] if first_line else f"Declaration in {f}"
+        lines.append(f"- **`{sym}`** (`{f}`): `{snippet}`")
+    if ctx.affected_modules:
+        lines.append(f"- **Module Architecture:** Located in `{', '.join(ctx.affected_modules)}` subsystem.")
+    return "\n".join(lines) if lines else "Implementation logic verified from repository source symbols."
+
+
+def _build_technical_details(ctx: InvestigationContext) -> str:
+    """Optional technical notes for PM/BA answers when relevant."""
+    details = []
+    if ctx.affected_modules:
+        details.append(f"- **Subsystem Modules:** `{', '.join(ctx.affected_modules)}`")
+    if ctx.business_rules:
+        details.append(f"- **Active Domain Guardrails:** {len(ctx.business_rules)} verified rule(s)")
+    if ctx.state_machines:
+        for sm in ctx.state_machines[:2]:
+            details.append(f"- **State Transitions ({sm.get('entity')}):** {', '.join(sm.get('states', [])[:6])}")
+    return "\n".join(details)
+
+
+def _build_hypothetical_implementation(ctx: InvestigationContext) -> str:
+    """Provide architectural impact analysis for hypothetical questions (Rule 14)."""
+    mod_str = ', '.join(ctx.affected_modules) if ctx.affected_modules else 'core application'
+    return (
+        f"- **Current Foundation:** Grounded in `{mod_str}`.\n"
+        f"- **Frontend Impact:** New UI input controls and validation feedback required in client views.\n"
+        f"- **Backend & API Impact:** Route handlers must be extended to parse and validate new parameters.\n"
+        f"- **Data Model Impact:** Schema migrations required to add new fields or state tracking tables.\n"
+        f"- **Security & Roles:** Permission matrix must be updated to restrict access according to role policies."
     )
 
 
@@ -635,67 +721,88 @@ def _build_claims_grounding(ctx: InvestigationContext) -> list[dict[str, Any]]:
 
 
 def _step_synthesize_answer(ctx: InvestigationContext, repo_overview: str = "") -> str:
-    """Synthesize the final structured answer from investigation results."""
-    business_explanation = _build_business_explanation(ctx, repo_overview)
+    """Synthesize final question-aware answer adhering strictly to Rules 2, 4, 5, 11, 12, 14."""
+    # 1. Unsupported Question handling
+    if ctx.answer_status == "INSUFFICIENT_EVIDENCE" or not ctx.merged_evidence:
+        missing_terms = ", ".join(ctx.query_intent.entities) if ctx.query_intent and ctx.query_intent.entities else ctx.question
+        return redact_secrets(
+            f"### Insufficient Evidence\n\n"
+            f"The analyzed repository does not contain sufficient implementation evidence regarding '{ctx.question}'. "
+            f"No matching routes, data models, or functional handlers were identified in the codebase for {missing_terms}."
+        )
 
-    # Technical evidence citations
-    tech_evidence_items = []
-    for e in ctx.merged_evidence[:4]:
-        ref_path = e["source_ref"].split("#")[0].split(":")[0]
-        sym = e["source_ref"].split(":")[-1] if ":" in e["source_ref"] else ref_path.split("/")[-1]
-        tech_evidence_items.append(f"- `{ref_path}` (symbol: `{sym}`)")
+    direct_answer = _build_business_explanation(ctx, repo_overview)
 
-    current_behaviour = f"{business_explanation}\n\n**Technical Implementation Details:**\n" + "\n".join(tech_evidence_items)
+    # Format specific evidence citations (Rule 5)
+    evidence_items = []
+    for item in ctx.verified_claims[:6]:
+        ref = item.get("source_ref", "")
+        f_path = item.get("file", "") or ref.split("#")[0].split(":")[0]
+        sym = item.get("symbol", "")
+        sym_name = sym.split(":")[-1] if ":" in sym else sym.split("#")[-1] if "#" in sym else f_path.split("/")[-1]
+        lines_info = ""
+        if "#" in ref:
+            lines_info = f", lines {ref.split('#')[-1]}"
+        elif "lines" in item and item["lines"]:
+            lines_info = f", {item['lines']}"
+        why = item.get("why_relevant", "")
+        clean_why = why.split("\n")[0][:120].strip() if why else "supports implementation"
+        evidence_items.append(f"- `{f_path}` (symbol: `{sym_name}`{lines_info}): {clean_why}")
 
+    if not evidence_items and ctx.merged_evidence:
+        for e in ctx.merged_evidence[:4]:
+            ref = e.get("source_ref", "")
+            f_path = ref.split("#")[0].split(":")[0]
+            sym_name = ref.split(":")[-1] if ":" in ref else f_path.split("/")[-1]
+            evidence_items.append(f"- `{f_path}` (symbol: `{sym_name}`)")
+
+    evidence_section = "### Evidence\n" + "\n".join(evidence_items)
+
+    sections = []
+
+    # Check for contradictions
     if ctx.contradictions:
         contradiction_banner = (
             "### Contradiction Detected\n"
             "**Repository evidence is inconsistent.**\n\n" +
             "\n".join(f"- {c}" for c in ctx.contradictions)
         )
-        current_behaviour = f"{contradiction_banner}\n\n{current_behaviour}"
+        sections.append(contradiction_banner)
 
-    # Build sections
-    sections = []
-    qi = ctx.query_intent
-    if qi and qi.intent == "purpose":
-        sections.append(f"### Application Purpose & Overview\n{current_behaviour}")
-        sections.append(f"### Core Workflows & Capabilities\n" + ("\n".join(ctx.flow_steps) if ctx.flow_steps else "Direct execution flow."))
+    # Detect question abstraction level / category (Rule 4, 11, 12, 14)
+    q_lower = ctx.effective_question.lower()
+    is_technical = any(i in ctx.intents for i in ["API", "DATABASE", "DATA_ENTITY", "DEPENDENCY", "ARCHITECTURE"]) or \
+                   any(q_lower.startswith(p) for p in ["which function", "which api", "which endpoint", "which table", "which model", "where is", "how is the database", "what table", "what endpoint", "which component"])
+    is_workflow = any(i in ctx.intents for i in ["WORKFLOW", "HOW_IT_WORKS", "LIFECYCLE_STATUS"]) or \
+                  any(q_lower.startswith(p) for p in ["how does", "what happens when", "what happens after", "walk me through", "describe the flow"])
+    is_hypothetical = any(i in ctx.intents for i in ["ENHANCEMENT_IMPACT", "RISK"]) or \
+                      any(p in q_lower for p in ["what would happen if", "what would we need to change", "how would we add", "what changes are needed"])
+
+    if is_hypothetical:
+        sections.append(f"### Direct Answer\n{direct_answer}")
+        sections.append(f"### Implementation\n" + _build_hypothetical_implementation(ctx))
+        sections.append(evidence_section)
+    elif is_technical:
+        sections.append(f"### Direct Answer\n{direct_answer}")
+        sections.append(f"### Implementation\n" + _build_technical_implementation(ctx))
+        sections.append(evidence_section)
+    elif is_workflow:
+        sections.append(f"### Direct Answer\n{direct_answer}")
+        workflow_steps = "\n".join(ctx.flow_steps) if ctx.flow_steps else "1. **Initiation:** Request is dispatched to application handler.\n2. **Validation:** Domain constraints evaluated.\n3. **Persistence:** State updated in database."
+        sections.append(f"### Workflow\n{workflow_steps}")
+        sections.append(evidence_section)
     else:
-        sections.append(f"### Direct Answer\n{current_behaviour}")
-        sections.append(f"### How It Works\n" + ("\n".join(ctx.flow_steps) if ctx.flow_steps else "Direct execution flow."))
-
-    if ctx.business_rules:
-        sections.append(f"### Business Rules & Validations\n" + "\n".join(f"- {r}" for r in ctx.business_rules))
-
-    # Intent-specific sections
-    _add_intent_specific_sections(ctx, sections)
-
-    if ctx.affected_modules:
-        sections.append(f"### Impacted Components\n" + ", ".join(f"`{m}`" for m in ctx.affected_modules))
-
-    # Add lineage trace section if present
-    if ctx.lineage_traces:
-        lineage_items = []
-        for lt in ctx.lineage_traces[:3]:
-            fn = lt.get("field_name", "")
-            entity = lt.get("entity_name", "")
-            lineage_items.append(
-                f"- **{entity}.{fn}**: UI input → HTTP parameter → backend attribute → model → database column"
-            )
-        sections.append(f"### Data Lineage\n" + "\n".join(lineage_items))
-
-    # Add state machine section if present
-    if ctx.state_machines:
-        sm_items = []
-        for sm in ctx.state_machines[:2]:
-            entity = sm.get("entity", "")
-            states = sm.get("states", [])
-            sm_items.append(f"- **{entity}**: [{', '.join(states[:8])}]")
-        sections.append(f"### State Machines\n" + "\n".join(sm_items))
+        # Standard PM/BA functional/business question
+        sections.append(f"### Direct Answer\n{direct_answer}")
+        what_happens_steps = "\n".join(ctx.flow_steps) if ctx.flow_steps else "1. **Initiation:** The user submits input via the application interface.\n2. **Validation:** Input data is validated against domain constraints.\n3. **Persistence:** Processing updates persistent data records."
+        sections.append(f"### What Happens\n{what_happens_steps}")
+        sections.append(evidence_section)
+        tech_details = _build_technical_details(ctx)
+        if tech_details:
+            sections.append(f"### Technical Details\n{tech_details}")
 
     if ctx.gaps:
-        sections.append(f"### Gaps & Verification Status\n" + "\n".join(f"- {g}" for g in ctx.gaps))
+        sections.append("### Gaps & Verification Status\n" + "\n".join(f"- {g}" for g in ctx.gaps))
 
     sections.append(f"\n*Confidence: {ctx.confidence} | {len(ctx.verified_claims)} cited source(s); {ctx.dropped_claims} dropped by guardrail.*")
 

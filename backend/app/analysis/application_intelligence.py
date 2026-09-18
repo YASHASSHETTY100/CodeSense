@@ -385,6 +385,15 @@ def save_application_intelligence(aim: ApplicationIntelligenceModel) -> None:
         pass
 
 
+def clear_aim_cache(project_id: int | None = None) -> None:
+    """Clear in-memory application intelligence cache."""
+    if project_id is not None:
+        _AIM_CACHE.pop(project_id, None)
+    else:
+        _AIM_CACHE.clear()
+
+
+
 def build_application_intelligence(
     db: Session, project_id: int, repo_dir: str
 ) -> ApplicationIntelligenceModel:
@@ -636,13 +645,13 @@ def _extract_data_models_and_lineage(
             aim.data_lineage[lineage_key] = {
                 "field_name": fname,
                 "entity_name": ent.name,
-                "ui_input": f"Input field for {fname} in checkout/profile forms",
+                "ui_input": f"Input field for {fname} in application forms/views",
                 "http_parameter": fname.lower(),
-                "backend_attribute": f"request.POST.get('{fname.lower()}')",
+                "backend_attribute": f"request payload attribute '{fname.lower()}'",
                 "service_handler": f"process_{ent.name.lower()}",
                 "model_name": ent.name,
                 "database_field": f"{ent.name}.{fname}",
-                "consumers": [f"{ent.name} view", f"{ent.name} update handler"],
+                "consumers": [f"{ent.name} view", f"{ent.name} handler"],
                 "evidence": [{"file_path": "models.py", "symbol_name": ent.name, "lines": fname}],
             }
 
@@ -668,11 +677,11 @@ def _extract_roles_and_permissions(
 
     # Add default roles if not discovered
     existing_role_names = {r["name"].lower() for r in aim.entities[CAT_ROLE]}
-    for d_role in ["Anonymous / Visitor", "Authenticated Customer", "Staff / Admin"]:
+    for d_role in ["Administrator", "Standard User"]:
         if d_role.lower() not in existing_role_names:
             aim.add_entity(CAT_ROLE, {
                 "name": d_role,
-                "permissions": ["view_products", "place_order", "manage_profile"] if "Customer" in d_role else ["manage_all"],
+                "permissions": ["administrative_access"] if "Admin" in d_role else ["standard_access"],
             })
 
 
@@ -727,20 +736,36 @@ def _extract_state_machines(
             if re.search(r"\b" + kw + r"\b", tl):
                 found_states.add(kw)
 
-    if found_states:
-        order_sm = {
-            "entity": "Order",
-            "states": sorted(found_states),
-            "initial_state": "pending" if "pending" in found_states else list(found_states)[0],
-            "transitions": [
-                {"from_state": "pending", "to_state": "paid", "trigger": "Payment authorization success"},
-                {"from_state": "paid", "to_state": "processing", "trigger": "Order fulfillment dispatch"},
-                {"from_state": "processing", "to_state": "shipped", "trigger": "Carrier tracking assigned"},
-                {"from_state": "shipped", "to_state": "delivered", "trigger": "Delivery confirmation"},
-            ],
-            "evidence": [{"source": "Repository state constants and order flow"}],
+    entities = db.query(DataEntity).filter(DataEntity.project_id == project_id).all()
+    target_entity = None
+    for e in entities:
+        try:
+            flds = [f.get("name", "") if isinstance(f, dict) else str(f) for f in json.loads(e.fields_json or "[]")]
+            if any(term in f.lower() for f in flds for term in ["status", "state", "stage", "phase"]):
+                target_entity = e.name
+                break
+        except Exception:
+            pass
+
+    if not target_entity and entities:
+        target_entity = entities[0].name
+
+    if found_states and target_entity:
+        ordered_states = sorted(found_states)
+        transitions = []
+        for i in range(len(ordered_states) - 1):
+            transitions.append({
+                "from_state": ordered_states[i],
+                "to_state": ordered_states[i + 1],
+                "trigger": f"Advance {target_entity} status from {ordered_states[i]} to {ordered_states[i+1]}",
+            })
+        aim.state_machines[target_entity] = {
+            "entity": target_entity,
+            "states": ordered_states,
+            "initial_state": ordered_states[0],
+            "transitions": transitions,
+            "evidence": [{"source": f"Repository state constants and lifecycle for {target_entity}"}],
         }
-        aim.state_machines["Order"] = order_sm
 
 
 def _extract_behavior_and_workflows(

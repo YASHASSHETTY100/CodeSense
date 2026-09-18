@@ -62,4 +62,39 @@ export async function api(path: string, opts: any = {}) {
   return contentType.includes('json') ? r.json() : r.text();
 }
 
+export async function downloadFile(path: string, defaultFilename: string = 'document.bin'): Promise<void> {
+  const token = getToken();
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const url = path.startsWith('http') ? path : `${BASE}${path}`;
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    let msg = `Download failed with status ${res.status}`;
+    try {
+      const errJson = await res.json();
+      msg = errJson.detail || JSON.stringify(errJson);
+    } catch {
+      // ignore
+    }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  let filename = defaultFilename;
+  const disposition = res.headers.get('content-disposition');
+  if (disposition && disposition.includes('filename=')) {
+    const match = disposition.match(/filename="?([^";]+)"?/);
+    if (match && match[1]) {
+      filename = match[1].trim();
+    }
+  }
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.style.display = 'none';
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
+}
+
 export { BASE };
